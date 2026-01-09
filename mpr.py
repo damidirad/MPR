@@ -7,7 +7,7 @@ import csv
 import torch
 from fairness_training import train_fair_mf_mpr
 from collaborative_models import matrixFactorization
-from amortized_sst import AmortizedSST, train_amortized_sst
+from amortized_sst import AmortizedSST, train_amortized_sst, evaluate_amortized_sst
 
 parser = argparse.ArgumentParser(description='fairRec')
 parser.add_argument('--gpu_id',
@@ -106,6 +106,10 @@ num_uniqueLikes = max(train_data.item_id) + 1
 
 MF_model = matrixFactorization(np.int64(num_uniqueUsers), np.int64(num_uniqueLikes), emb_size).to(device)
 
+if os.path.exists(args.orig_unfair_model):
+    print(f"Loading pre-trained MF weights from {args.orig_unfair_model}")
+    MF_model.load_state_dict(torch.load(args.orig_unfair_model, map_location=device))
+
 print(args)
 
 # initialized model
@@ -113,7 +117,12 @@ print(args)
 
 # the range of priors used in Multiple Prior Guided Robust Optimization
 # here we choose 37 different priors
-resample_range = torch.linspace(0.1, 0.9, 37).to(device)
+resample_range = torch.tensor([
+    0.1, 0.105, 0.11, 0.12, 0.125, 0.13, 0.14, 0.15, 0.17,
+    0.18, 0.2, 0.22, 0.25, 0.29, 0.33, 0.4, 0.5, 0.67, 0.75,
+    0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.91, 0.92, 0.93, 0.94, 
+    0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.995, 0.999
+], dtype=torch.float32).to(device)
 
 s0_ratio = args.partial_ratio_s0 
 s1_ratio = args.partial_ratio_s1 
@@ -147,6 +156,15 @@ train_amortized_sst(
     s0_known, 
     s1_known, 
     epochs=20, 
+    device=device
+)
+
+print("\nVerifying Amortized SST Performance...")
+evaluate_amortized_sst(
+    sst_model, 
+    MF_model, 
+    s0_known, 
+    s1_known, 
     device=device
 )
 

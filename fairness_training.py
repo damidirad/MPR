@@ -35,6 +35,9 @@ def train_fair_mf_mpr(
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     model.train()
 
+    # set sst model to eval mode
+    sst_model.eval()
+
     # track best metrics and epoch
     test_rmse_in_that_epoch = float("inf")
     best_val_unfairness = float("inf")
@@ -45,8 +48,8 @@ def train_fair_mf_mpr(
 
     # compute number of batches per epoch
     num_batches = len(df_train) // batch_size
-    
-    resample_tensor = torch.tensor(resample_range, dtype=torch.float32, device=device)
+
+    resample_tensor = resample_range.clone().detach().to(device)
 
     # loop over epochs
     for epoch in tqdm(range(epochs), desc="Training Fair MF-MPR"):
@@ -88,10 +91,10 @@ def train_fair_mf_mpr(
             # expand prior probabilities for each user in batch
             p0_flat = resample_tensor.repeat(batch_size, 1).view(-1,1) 
 
-            # compute predicted sensitive attribute for each user-prior pair
-            s_hat_flat = sst_model(user_emb_flat, p0_flat)
-            # reshape to (batch_size, num_priors)
-            s_hat_all = s_hat_flat.view(batch_size, len(resample_range))
+            with torch.no_grad():
+                # compute predicted sensitive attribute for each user-prior pair
+                s_hat_flat = sst_model(user_emb_flat, p0_flat)
+                s_hat_all = s_hat_flat.view(batch_size, len(resample_range))
 
             # expand y_hat to match number of priors
             y_hat_exp = y_hat.unsqueeze(1).expand(-1, num_priors)
@@ -103,8 +106,8 @@ def train_fair_mf_mpr(
             # fairness difference per prior
             fair_diffs = torch.abs(mu_1 - mu_0) / beta
             # log-sum-exp trick to avoid overflow
-            C = torch.max(fair_diffs).detach()
-            fair_regulation = fair_reg * beta * (torch.log(torch.sum(torch.exp(fair_diffs - C)) + eps) + C)
+            log_sum_exp = torch.logsumexp(fair_diffs, dim=0)
+            fair_regulation = fair_reg * beta * log_sum_exp
 
             # combine rating loss and fairness regularization
             total_loss = loss + fair_regulation
