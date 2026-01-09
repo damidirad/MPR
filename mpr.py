@@ -1,24 +1,13 @@
-# -*- coding: utf-8 -*-
 import argparse
 import numpy as np
 import pandas as pd
-from sklearn.metrics import accuracy_score, roc_auc_score,f1_score, ndcg_score, recall_score
-from sklearn.model_selection import train_test_split 
 import os
-import copy
-import math
-import heapq # for retrieval topK
 import random
 import csv
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.autograd import Variable
-import torch.nn.functional as F
-from fairness_training import pretrain_epochs_with_resampled_ensemble_sst_reg_eval_unfairness_valid_partial_safe_rmse_thresh_eval
-from collaborative_models import matrixFactorization, sst_pred
-
-from tqdm import tqdm
+from fairness_training import train_fair_mf_mpr
+from collaborative_models import matrixFactorization
+from amortized_sst import AmortizedSST, train_amortized_sst
 
 parser = argparse.ArgumentParser(description='fairRec')
 parser.add_argument('--gpu_id',
@@ -111,20 +100,10 @@ print(args)
 
 # the range of priors used in Multiple Prior Guided Robust Optimization
 # here we choose 37 different priors
-resample_range =[ "0.1", "0.105", "0.11","0.12", "0.125", "0.13", "0.14", "0.15", "0.17","0.18", "0.2", "0.22", "0.25", "0.29", "0.33", "0.4", "0.5", "0.67", "1.0",
-                  "1.5", "2.0", "2.5","3.0","3.5","4.0","4.5","5.0","5.5", "6.0","6.5", "7.0","7.5","8.0","8.5","9.0","9.5","10.0"]
-# for same resample ratio, we use 3 different random seeds to avoid running into extreme cases.
-seed_range = [1, 2, 3]
+resample_range = torch.linspace(0.1, 0.9, 37).to(device)
+
 male_ratio = args.partial_ratio_male 
 female_ratio = args.partial_ratio_female 
-predicted_sensitive_attr_dict = {}
-main_dir = os.path.join(args.predict_sst_path, f"{args.task_type}_{male_ratio}_male_{female_ratio}_female_gender_train_epoch_1000")
-
-for resample_ratio in resample_range:
-    predicted_sensitive_attr_dict[resample_ratio] = {}
-    for seed_sample in seed_range:
-      predicted_sensitive_attr_dict[resample_ratio][seed_sample] = pd.read_csv(os.path.join(main_dir, f"resample_{resample_ratio}_seed{seed_sample}.csv"))
-
 
 # rmse_thresh
 if args.task_type == "Lastfm-360K":
@@ -146,10 +125,43 @@ else:
 
 print("rmse thresh:" + str(rmse_thresh))
 
+# Initialize and train amortized SST model
+sst_model = AmortizedSST(emb_size).to(device)
+print("Start training amortized SST classifier...")
+train_amortized_sst(
+    sst_model, 
+    MF_model, 
+    gender_known_male, 
+    gender_known_female, 
+    epochs=20, 
+    device=device
+)
 
-val_rmse_in_that_epoch, test_rmse_in_that_epoch, best_unfairness_val, unfairness_test, best_epoch, best_model = \
-        pretrain_epochs_with_resampled_ensemble_sst_reg_eval_unfairness_valid_partial_safe_rmse_thresh_eval(MF_model, train_data,num_epochs,learning_rate, weight_decay, batch_size, beta, valid_data, \
-            test_data, predicted_sensitive_attr_dict, orig_sensitive_attr, top_K, fair_reg ,gender_known_male, gender_known_female, device = device, evaluation_epoch= evaluation_epoch, unsqueeze=True,  early_stop=args.early_stop, rmse_thresh=rmse_thresh)
+# Pretrain MF model with Multiple Prior Robust Optimization and evaluate on validation and test set
+val_rmse, test_rmse, best_unf, unf_test, best_epoch, best_model = \
+    train_fair_mf_mpr(
+        model=MF_model, 
+        sst_model=sst_model,
+        df_train=train_data,
+        epochs=num_epochs,
+        lr=learning_rate,
+        weight_decay=weight_decay,
+        batch_size=batch_size,
+        beta=beta,
+        valid_data=valid_data,
+        test_data=test_data,
+        resample_range=resample_range, 
+        oracle_sensitive_attr=orig_sensitive_attr,
+        top_K=top_K,
+        fair_reg=fair_reg,
+        gender_known_male=gender_known_male,
+        gender_known_female=gender_known_female,
+        device=device,
+        evaluation_epoch=evaluation_epoch,
+        unsqueeze=True,
+        early_stop=args.early_stop,
+        rmse_thresh=rmse_thresh
+    )
 
 os.makedirs(args.saving_path, exist_ok= True)
 torch.save(MF_model.state_dict(), args.saving_path + "/MF_model")
@@ -167,7 +179,3 @@ except:
     with open(args.result_csv,"a") as csvfile: 
         writer = csv.writer(csvfile)
         writer.writerow(["args", "val_rmse_in_that_epoch", "test_rmse_in_that_epoch", "best_unfairness_val_partial", "unfairness_test", "best_epoch"])
-
-with open(args.result_csv,"a") as csvfile: 
-    writer = csv.writer(csvfile)
-    writer.writerow([args, val_rmse_in_that_epoch, test_rmse_in_that_epoch, best_unfairness_val, unfairness_test, best_epoch])

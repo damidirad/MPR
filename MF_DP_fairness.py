@@ -3,24 +3,13 @@
 import argparse
 import numpy as np
 import pandas as pd
-from evaluation import evaluate_model_performance_and_naive_fairness_fast_rmse, evaluate_model_performance_and_naive_fairness_fast_partial_valid_rmse
-
+from evaluation import validate_fairness, test_fairness
 import os
-
-import math
-import heapq # for retrieval topK
-import random
-import time
 import csv
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.autograd import Variable
-import torch.nn.functional as F
-
 from collaborative_models import matrixFactorization
-
-from tqdm import tqdm
 import copy
 
 parser = argparse.ArgumentParser(description='fairRec')
@@ -73,7 +62,7 @@ task_type = args.task_type
 # random_samples = 100
 top_K = args.top_K
 
-def pretrain_epochs_partial_fairness_reg_eval_unfairness_valid_partial_rmse(model, df_train, epochs, lr, weight_decay, batch_size, valid_data, test_data, sensitive_attr, top_K, fair_reg, gender_known_male, gender_known_female, evaluation_epoch=10, unsqueeze=False, shuffle=True, early_stop=10):
+def validate_fairness_rmse(model, df_train, epochs, lr, weight_decay, batch_size, valid_data, test_data, sensitive_attr, top_K, fair_reg, gender_known_male, gender_known_female, evaluation_epoch=10, unsqueeze=False, shuffle=True, early_stop=10):
     criterion = nn.BCELoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     model.train()
@@ -132,8 +121,8 @@ def pretrain_epochs_partial_fairness_reg_eval_unfairness_valid_partial_rmse(mode
             j = j+1
         print('epoch: ', idx, 'average loss: ',loss_total/ j, "fair reg:", fair_reg_total/j)
         if idx % evaluation_epoch == 0 :
-            rmse_val, naive_unfairness_val = evaluate_model_performance_and_naive_fairness_fast_partial_valid_rmse(model, valid_data, sensitive_attr, gender_known_male, gender_known_female, top_K, device)
-            rmse_test, naive_unfairness_test = evaluate_model_performance_and_naive_fairness_fast_rmse(model, test_data, sensitive_attr, top_K, device)
+            rmse_val, naive_unfairness_val = validate_fairness(model, valid_data, sensitive_attr, gender_known_male, gender_known_female, top_K, device)
+            rmse_test, naive_unfairness_test = test_fairness(model, test_data, sensitive_attr, top_K, device)
             print('epoch: ', idx, 'validation rmse:', rmse_val, 'Unfairness:', naive_unfairness_val)
             print('epoch: ', idx, 'test rmse:', rmse_test, "Unfairness:", naive_unfairness_test)
 
@@ -199,7 +188,7 @@ print(args)
 
 
 best_val_rmse, test_rmse_in_that_epoch, unfairness_val, unfairness_test, best_epoch, best_model = \
-        pretrain_epochs_partial_fairness_reg_eval_unfairness_valid_partial_rmse(MF_model,train_data,num_epochs,learning_rate, weight_decay, batch_size, valid_data, \
+        validate_fairness_rmse(MF_model,train_data,num_epochs,learning_rate, weight_decay, batch_size, valid_data, \
             test_data, sensitive_attr, top_K, fair_reg ,gender_known_male, gender_known_female, evaluation_epoch= evaluation_epoch, unsqueeze=True)
 
 os.makedirs(args.saving_path, exist_ok= True)

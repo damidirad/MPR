@@ -1,18 +1,9 @@
 import numpy as np
 import torch
-from tqdm import tqdm
-from sklearn.metrics import ndcg_score, roc_auc_score
-from sklearn.metrics import accuracy_score 
 from sklearn.metrics import mean_squared_error
-import pandas as pd
 
-
-def rooted_mean_squared_error(y_true, y_pred):
-    # y_pred = np.array(x['predict_ratings'])
-    # y_true = np.array(x['ratings'])
+def RMSE(y_true, y_pred):
     return np.sqrt(mean_squared_error(y_true, y_pred))
-
-
 
 # prob = y_hat
 # labels = test_rating
@@ -26,7 +17,7 @@ def evaluation_gender(data, label, model):
     pred_male_female_ratio = ((sum(pred_out == 0).item() + 1e-2)/(sum(pred_out == 1).item() + 1e-2))
     return acc, pred_male_female_ratio
 
-def evaluate_model_performance_and_naive_fairness_fast_partial_valid_rmse(model, df_val, df_sensitive_attr, gender_known_male, gender_known_female, top_K, device):
+def validate_fairness(model, df_val, df_sensitive_attr, gender_known_male, gender_known_female, top_K, device):
     model.eval()
     with torch.no_grad():
         test_user_total = torch.tensor(np.array(df_val["user_id"])).to(device)
@@ -56,13 +47,10 @@ def evaluate_model_performance_and_naive_fairness_fast_partial_valid_rmse(model,
                 fairness_count += 1
 
         naive_gender_unfairness = float(np.abs(np.mean(naive_fairness_dict[1]) - (np.mean(naive_fairness_dict[0]))))
-        rmse_result = rooted_mean_squared_error(y_true_all, y_pred_all)
+        rmse_result = RMSE(y_true_all, y_pred_all)
     return rmse_result, naive_gender_unfairness
 
-
-
-
-def evaluate_model_performance_and_naive_fairness_fast_rmse(model, df_val, df_sensitive_attr, top_K, device):
+def test_fairness(model, df_val, df_sensitive_attr, top_K, device):
     model.eval()
     with torch.no_grad():
         test_user_total = torch.tensor(np.array(df_val["user_id"])).to(device)
@@ -89,6 +77,6 @@ def evaluate_model_performance_and_naive_fairness_fast_rmse(model, df_val, df_se
             naive_fairness_dict[gender] += y_hat.tolist()
 
         naive_gender_unfairness = float(np.abs(np.mean(naive_fairness_dict[1]) - (np.mean(naive_fairness_dict[0]))))
-        rmse_result = rooted_mean_squared_error(y_true_all, y_pred_all)
+        rmse_result = RMSE(y_true_all, y_pred_all)
     return rmse_result, naive_gender_unfairness
 

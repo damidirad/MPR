@@ -50,8 +50,6 @@ class neuralCollabFilter(nn.Module):
         out = self.outLayer(out)
         out = self.out_act(out)
         return out
-
-
 class matrixFactorization(nn.Module):
     def __init__(self, num_users, num_items, emb_size):
         super(matrixFactorization, self).__init__()
@@ -82,9 +80,6 @@ class matrixFactorization(nn.Module):
         b_u = self.user_bias(u).squeeze()
         b_v = self.item_bias(v).squeeze()
         return (U*V).sum(1) +  b_u  + b_v
-
-
-
 class sst_pred(nn.Module):
     def __init__(self, inputsize, hidden_embed, outsize):
         super(sst_pred, self).__init__()
