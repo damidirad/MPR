@@ -49,7 +49,11 @@ def train_fair_mf_mpr(
     # compute number of batches per epoch
     num_batches = len(df_train) // batch_size
 
+    num_priors = resample_range.size(0)
+    eps = 1e-8
+
     resample_tensor = resample_range.clone().detach().to(device)
+    p0_flat = resample_tensor.repeat(batch_size, 1).view(-1, 1)
 
     # loop over epochs
     for epoch in tqdm(range(epochs), desc="Training Fair MF-MPR"):
@@ -77,45 +81,33 @@ def train_fair_mf_mpr(
             y_hat = model(train_user_input, train_item_input)
             loss = criterion(y_hat.view(-1), train_ratings.view(-1))
 
-            # get embeddings for current batch users
+            # get embeddings
             current_user_embs = model.user_emb(train_user_input)
 
-            # placeholder for fairness differences
-            fair_diffs = []
-            eps = 1e-8  # small epsilon to avoid division by zero
+            # evaluate all priors every step 
+            user_emb_flat = current_user_embs.repeat_interleave(num_priors, dim=0)
 
-            num_priors = len(resample_range)
+            s_hat_flat = sst_model(user_emb_flat, p0_flat)
+            s_hat_all = s_hat_flat.view(batch_size, num_priors)
 
-            # repeat user embeddings for each prior
-            user_emb_flat = current_user_embs.repeat_interleave(num_priors, dim=0)  
-            # expand prior probabilities for each user in batch
-            p0_flat = resample_tensor.repeat(batch_size, 1).view(-1,1) 
-
-            with torch.no_grad():
-                # compute predicted sensitive attribute for each user-prior pair
-                s_hat_flat = sst_model(user_emb_flat, p0_flat)
-                s_hat_all = s_hat_flat.view(batch_size, len(resample_range))
-
-            # expand y_hat to match number of priors
             y_hat_exp = y_hat.unsqueeze(1).expand(-1, num_priors)
 
-            # compute mean predictions for s=1 and s=0
             mu_1 = torch.sum(y_hat_exp * s_hat_all, dim=0) / (torch.sum(s_hat_all, dim=0) + eps)
             mu_0 = torch.sum(y_hat_exp * (1 - s_hat_all), dim=0) / (torch.sum(1 - s_hat_all, dim=0) + eps)
 
-            # fairness difference per prior
             fair_diffs = torch.abs(mu_1 - mu_0) / beta
-            # log-sum-exp trick to avoid overflow
-            log_sum_exp = torch.logsumexp(fair_diffs, dim=0)
-            fair_regulation = fair_reg * beta * log_sum_exp
 
-            # combine rating loss and fairness regularization
+            # log-sum-exp (robust objective)
+            C = fair_diffs.max().detach()
+            fair_regulation = fair_reg * beta * (torch.logsumexp(fair_diffs - C, dim=0) + C)
+
+            # total loss
             total_loss = loss + fair_regulation
+
             optimizer.zero_grad()
             total_loss.backward()
             optimizer.step()
 
-            # accumulate losses for reporting
             loss_total += loss.item()
             fair_reg_total += fair_regulation.item()
 

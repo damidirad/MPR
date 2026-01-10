@@ -117,12 +117,14 @@ print(args)
 
 # the range of priors used in Multiple Prior Guided Robust Optimization
 # here we choose 37 different priors
-resample_range = torch.tensor([
-    0.1, 0.105, 0.11, 0.12, 0.125, 0.13, 0.14, 0.15, 0.17,
-    0.18, 0.2, 0.22, 0.25, 0.29, 0.33, 0.4, 0.5, 0.67, 0.75,
-    0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.91, 0.92, 0.93, 0.94, 
-    0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.995, 0.999
-], dtype=torch.float32).to(device)
+# resample_range = torch.tensor([
+#     0.1, 0.105, 0.11, 0.12, 0.125, 0.13, 0.14, 0.15, 0.17,
+#     0.18, 0.2, 0.22, 0.25, 0.29, 0.33, 0.4, 0.5, 0.67, 0.75,
+#     0.8, 0.82, 0.84, 0.86, 0.88, 0.9, 0.91, 0.92, 0.93, 0.94, 
+#     0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.995, 0.999
+# ], dtype=torch.float32).to(device)
+
+resample_range = torch.linspace(0.01, 0.99, 15).to(device)
 
 s0_ratio = args.partial_ratio_s0 
 s1_ratio = args.partial_ratio_s1 
@@ -156,7 +158,8 @@ train_amortized_sst(
     s0_known, 
     s1_known, 
     epochs=20, 
-    device=device
+    device=device,
+    alpha=0.3
 )
 
 print("\nVerifying Amortized SST Performance...")

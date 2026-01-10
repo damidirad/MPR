@@ -67,14 +67,12 @@ def test_fairness(model, df_val, df_sensitive_attr, device):
             y_true_all += list(test_rating)
             y_pred_all += y_hat.tolist()
             if len(np.unique(test_rating)) != 1:
-                y_hat_sort_id = y_hat.sort(descending=True).indices
-                label_rank = test_rating[y_hat_sort_id]
                 uniq_count += 1
             gender = int(df_sensitive_dict.iloc[name]["gender"])
             naive_fairness_dict[gender] += y_hat.tolist()
 
-        naive_gender_unfairness = float(np.abs(np.mean(naive_fairness_dict[1]) - (np.mean(naive_fairness_dict[0]))))
+        naive_unfairness = float(np.abs(np.mean(naive_fairness_dict[1]) - (np.mean(naive_fairness_dict[0]))))
         rmse_result = RMSE(y_true_all, y_pred_all)
         
-    return rmse_result, naive_gender_unfairness
+    return rmse_result, naive_unfairness
 
