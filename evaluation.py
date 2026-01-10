@@ -35,8 +35,6 @@ def validate_fairness(model, df_val, df_sensitive_attr, s1_known, s0_known, devi
             y_true_all += list(test_rating)
             y_pred_all += y_hat.tolist()
             if len(np.unique(test_rating)) != 1:
-                y_hat_sort_id = y_hat.sort(descending=True).indices
-                label_rank = test_rating[y_hat_sort_id]
                 uniq_count += 1
             if (name in s0_known) or (name in s1_known  ): 
                 gender = int(df_sensitive_dict.iloc[name]["gender"])

@@ -9,6 +9,8 @@ from fairness_training import train_fair_mf_mpr
 from collaborative_models import matrixFactorization
 from amortized_sst import AmortizedSST, train_amortized_sst, evaluate_amortized_sst
 
+# RETRAIN SST ON KNOWN WORST PRIOR EVERY 50 EPOCHS
+
 parser = argparse.ArgumentParser(description='fairRec')
 parser.add_argument('--gpu_id',
                         type=str,
@@ -30,7 +32,7 @@ parser.add_argument('--seed', type=int, default=1, help="the random seed")
 parser.add_argument("--saving_path", type=str, default= "./debug_MPR_thresh_eval/", help= "the saving path for model")
 parser.add_argument("--result_csv", type=str, default="./debug_MPR_thresh_eval/result_contrast.csv", help="the path for saving result")
 parser.add_argument("--data_path", type=str, default="./datasets/Lastfm-360K/", help= "the data path")
-parser.add_argument("--fair_reg", type=float, default= 10, help= "the regulator for fairness")
+parser.add_argument("--fair_reg_max", type=float, default= 10, help= "the max regulator for fairness")
 parser.add_argument("--partial_ratio_s0", type=float, default= 0.5, help= "the known ratio for training sensitive attr s0 ")
 parser.add_argument("--partial_ratio_s1", type=float, default= 0.1, help= "the known ratio for training sensitive attr s1 ")
 parser.add_argument("--orig_unfair_model", type=str, default= "./pretrained_model/Lastfm-360K/MF_orig_model")
@@ -88,7 +90,7 @@ learning_rate = args.learning_rate
 batch_size = args.batch_size
 evaluation_epoch = args.evaluation_epoch
 weight_decay = args.weight_decay
-fair_reg = args.fair_reg
+fair_reg_max = args.fair_reg_max
 beta = args.beta 
 
 
@@ -115,8 +117,8 @@ print(args)
 # initialized model
 
 
-# the range of priors used in Multiple Prior Guided Robust Optimization
-# here we choose 37 different priors
+# # the range of priors used in Multiple Prior Guided Robust Optimization
+# # here we choose 37 different priors
 # resample_range = torch.tensor([
 #     0.1, 0.105, 0.11, 0.12, 0.125, 0.13, 0.14, 0.15, 0.17,
 #     0.18, 0.2, 0.22, 0.25, 0.29, 0.33, 0.4, 0.5, 0.67, 0.75,
@@ -124,7 +126,12 @@ print(args)
 #     0.95, 0.96, 0.97, 0.98, 0.985, 0.99, 0.995, 0.999
 # ], dtype=torch.float32).to(device)
 
-resample_range = torch.linspace(0.01, 0.99, 15).to(device)
+# resample_range = torch.linspace(0.01, 0.99, 15).to(device)
+resample_range = torch.tensor([
+    0.1, 0.105, 0.11, 0.14, 0.15, 0.17,
+    0.18, 0.2, 0.22, 0.5, 0.67, 0.75,
+    0.8, 0.82, 0.84, 0.9, 0.91, 0.98, 0.985, 0.99, 0.995, 0.999
+], dtype=torch.float32).to(device)
 
 s0_ratio = args.partial_ratio_s0 
 s1_ratio = args.partial_ratio_s1 
@@ -159,7 +166,7 @@ train_amortized_sst(
     s1_known, 
     epochs=20, 
     device=device,
-    alpha=0.3
+    alpha_max=0.6
 )
 
 print("\nVerifying Amortized SST Performance...")
@@ -187,7 +194,7 @@ val_rmse, test_rmse, best_unf, unf_test, best_epoch, best_model = \
         test_data=test_data,
         resample_range=resample_range, 
         oracle_sensitive_attr=orig_sensitive_attr,
-        fair_reg=fair_reg,
+        fair_reg_max=fair_reg_max,
         s0_known=s0_known,
         s1_known=s1_known,
         device=device,

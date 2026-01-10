@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from evaluation import validate_fairness, test_fairness
+from amortized_sst import fair_reg_schedule, refine_sst, evaluate_amortized_sst
 from tqdm import tqdm
 
 def train_fair_mf_mpr(
@@ -20,7 +21,7 @@ def train_fair_mf_mpr(
     test_data,
     resample_range,
     oracle_sensitive_attr,
-    fair_reg,
+    fair_reg_max,
     s0_known,
     s1_known,
     device,
@@ -45,6 +46,7 @@ def train_fair_mf_mpr(
     val_rmse_in_that_epoch = float("inf")
     best_epoch = 0
     achieve_rmse_thresh = False
+    prev_naive_unfairness_test = float("inf")
 
     # compute number of batches per epoch
     num_batches = len(df_train) // batch_size
@@ -64,6 +66,9 @@ def train_fair_mf_mpr(
         indices = np.arange(len(df_train))
         if shuffle:
             np.random.shuffle(indices)
+
+        epoch_worst_diff = -float("inf")
+        epoch_worst_prior = None
 
         # loop over batches
         for batch_idx in range(num_batches):
@@ -97,8 +102,15 @@ def train_fair_mf_mpr(
 
             fair_diffs = torch.abs(mu_1 - mu_0) / beta
 
+            batch_max_diff, batch_max_idx = fair_diffs.max(dim=0)
+
+            if batch_max_diff.item() > epoch_worst_diff:
+                epoch_worst_diff = batch_max_diff.item()
+                epoch_worst_prior = resample_range[batch_max_idx].item()
+
             # log-sum-exp (robust objective)
             C = fair_diffs.max().detach()
+            fair_reg = fair_reg_schedule(epoch, fair_reg_max, warmup=20)
             fair_regulation = fair_reg * beta * (torch.logsumexp(fair_diffs - C, dim=0) + C)
 
             # total loss
@@ -113,6 +125,28 @@ def train_fair_mf_mpr(
 
         # print epoch averages
         print(f"epoch {epoch}: avg loss {loss_total/num_batches:.4f}, avg fair reg {fair_reg_total/num_batches:.4f}")
+
+        if epoch > 0 and (epoch % 30 == 0 or (naive_unfairness_test and naive_unfairness_test >= prev_naive_unfairness_test * 0.99)):
+            print(f"\n[Adversarial Update] Refining SST on worst priors at epoch {epoch}...")
+            
+            # use fair diffs from last batch for refinement
+            refine_sst(
+                sst_model, 
+                model, 
+                s0_known, 
+                s1_known, 
+                resample_range, 
+                fair_diffs, 
+                device
+            )
+
+            evaluate_amortized_sst(
+                sst_model, 
+                model, 
+                s0_known, 
+                s1_known, 
+                device
+            )
 
         # evaluate on validation and test set every few epochs
         if epoch % evaluation_epoch == 0:
@@ -136,6 +170,13 @@ def train_fair_mf_mpr(
                     test_rmse_in_that_epoch = rmse_test
                     naive_unfairness_test_in_that_epoch = naive_unfairness_test
                     best_model = copy.deepcopy(model)
+        print(
+            f"[Epoch {epoch}] "
+            f"Worst prior: p={epoch_worst_prior:.3f}, "
+            f"fairness violation={epoch_worst_diff:.4f}"
+        )
+        if epoch > 0:
+            prev_naive_unfairness_test = naive_unfairness_test
 
     # fallback in case no model reached rmse threshold
     if not achieve_rmse_thresh:
