@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from tqdm import tqdm
-import random
+import numpy as np
 
 from torch.utils.data import DataLoader, TensorDataset
 class AmortizedSST(nn.Module):
@@ -161,7 +161,7 @@ def refine_sst(sst_model, mf_model, s0_known, s1_known, resample_range, fair_dif
     worst_priors = resample_range[top_indices].tolist()
     
     # avoid forgetting by mixing with stable priors
-    active_priors = list(set(worst_priors + [0.1, 0.5, 0.9]))
+    active_priors = list(set(worst_priors + [0.1, 0.35, 0.5, 0.65, 0.9]))
     
     # data
     user_ids = torch.cat([torch.tensor(s0_known), torch.tensor(s1_known)]).to(device)
@@ -184,3 +184,16 @@ def refine_sst(sst_model, mf_model, s0_known, s1_known, resample_range, fair_dif
             optimizer.step()
             
     sst_model.eval()
+
+def fairness_stalled(hist, window=10, tol=1e-3):
+    if len(hist) < window:
+        return False
+    recent = hist[-window:]
+    improvement = max(recent) - min(recent)
+    return improvement < tol
+
+def prior_oscillating(hist, window=10, tol=1e-2):
+    if len(hist) < window:
+        return False
+    recent = np.array(hist[-window:])
+    return recent.max() - recent.min() < tol

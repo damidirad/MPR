@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 
 from evaluation import validate_fairness, test_fairness
-from amortized_sst import fair_reg_schedule, refine_sst, evaluate_amortized_sst
+from amortized_sst import fair_reg_schedule, refine_sst, evaluate_amortized_sst, fairness_stalled, prior_oscillating
 from tqdm import tqdm
 
 def train_fair_mf_mpr(
@@ -47,6 +47,12 @@ def train_fair_mf_mpr(
     best_epoch = 0
     achieve_rmse_thresh = False
     prev_naive_unfairness_test = float("inf")
+    sst_frozen = False
+    stall_window = 10
+    stall_tol = 1e-3
+
+    epoch_worst_history = []
+    epoch_prior_history = []
 
     # compute number of batches per epoch
     num_batches = len(df_train) // batch_size
@@ -68,6 +74,7 @@ def train_fair_mf_mpr(
             np.random.shuffle(indices)
 
         epoch_worst_diff = -float("inf")
+        epoch_worst_fair_diffs = None
         epoch_worst_prior = None
 
         # loop over batches
@@ -107,6 +114,7 @@ def train_fair_mf_mpr(
             if batch_max_diff.item() > epoch_worst_diff:
                 epoch_worst_diff = batch_max_diff.item()
                 epoch_worst_prior = resample_range[batch_max_idx].item()
+                epoch_worst_fair_diffs = fair_diffs.detach()
 
             # log-sum-exp (robust objective)
             C = fair_diffs.max().detach()
@@ -124,9 +132,23 @@ def train_fair_mf_mpr(
             fair_reg_total += fair_regulation.item()
 
         # print epoch averages
-        print(f"[Results] Epoch {epoch}: \nAvg Loss {loss_total/num_batches:.4f} \nAvg Fair Reg {fair_reg_total/num_batches:.4f}")
+        print(f"[Epoch {epoch}] Avg loss {loss_total/num_batches:.4f} \n[Epoch {epoch}] Avg fair reg {fair_reg_total/num_batches:.4f}")
 
-        if epoch > 0 and (epoch % 30 == 0 or (naive_unfairness_test and naive_unfairness_test >= prev_naive_unfairness_test * 0.995)):
+        epoch_worst_history.append(epoch_worst_diff)
+        epoch_prior_history.append(epoch_worst_prior)
+
+        if not sst_frozen:
+            if fairness_stalled(epoch_worst_history, stall_window, stall_tol) \
+            and prior_oscillating(epoch_prior_history, stall_window):
+
+                print("[STALL DETECTED] Freezing SST")
+                sst_frozen = True
+                sst_model.eval()
+                for p in sst_model.parameters():
+                    p.requires_grad = False
+
+        if epoch > 0 and not sst_frozen and (epoch % 30 == 0 or \
+        (naive_unfairness_test and naive_unfairness_test >= prev_naive_unfairness_test * 0.995)):
             print(f"\n[Adversarial Update] Refining SST on worst priors at epoch {epoch}...")
             
             # use fair diffs from last batch for refinement
@@ -136,7 +158,7 @@ def train_fair_mf_mpr(
                 s0_known, 
                 s1_known, 
                 resample_range, 
-                fair_diffs, 
+                epoch_worst_fair_diffs, 
                 device
             )
 
@@ -157,8 +179,8 @@ def train_fair_mf_mpr(
                 model, test_data, oracle_sensitive_attr, device
             )
 
-            print(f"[Results] Validation RMSE: {rmse_val:.4f}, \nPartial Valid Unfairness: {naive_unfairness_val:.4f} \
-                  \nTest RMSE: {rmse_test:.4f}, \nUnfairness: {naive_unfairness_test:.4f}")
+            print(f"[Epoch {epoch}] Validation RMSE: {rmse_val:.4f}, \n[Epoch {epoch}] Partial Valid Unfairness: {naive_unfairness_val:.4f} \
+                  \n[Epoch {epoch}] Test RMSE: {rmse_test:.4f}, \n[Epoch {epoch}] Unfairness: {naive_unfairness_test:.4f}")
 
             # track best model if rmse threshold is reached
             if rmse_thresh is not None and rmse_val < rmse_thresh:
@@ -173,7 +195,7 @@ def train_fair_mf_mpr(
         print(
             f"[Epoch {epoch}] "
             f"Worst prior: p={epoch_worst_prior:.3f}, "
-            f"fairness violation={epoch_worst_diff:.4f}"
+            f"Fairness violation={epoch_worst_diff:.4f}"
         )
         if epoch > 0:
             prev_naive_unfairness_test = naive_unfairness_test
