@@ -51,6 +51,7 @@ def train_fair_mf_mpr(
     stall_tol = 5e-3
 
     num_all_priors = resample_range.shape[0]
+    num_users = df_train["user_id"].nunique()
 
     # subsample priors
     PRIOR_SUBSAMPLE_SIZE = 8
@@ -74,7 +75,7 @@ def train_fair_mf_mpr(
         resample_tensor = resample_range.clone().detach().to(device)
         p0_sub = resample_tensor[prior_idx]
         num_priors = p0_sub.shape[0]
-        p0_flat = p0_sub.repeat(batch_size, 1).view(-1, 1)
+        p0_flat = p0_sub.repeat(num_users, 1).view(-1, 1)
 
         loss_total = 0.0
         fair_reg_total = 0.0
@@ -87,6 +88,18 @@ def train_fair_mf_mpr(
         epoch_worst_diff = -float("inf")
         epoch_worst_fair_diffs = None
         epoch_worst_prior = None
+
+        all_user_ids = torch.arange(num_users).to(device)
+        all_user_embs = model.user_emb(all_user_ids)       # compute embeddings once per epoch
+
+        # repeat embeddings for all priors
+        all_user_emb_flat = all_user_embs.repeat_interleave(num_priors, dim=0)
+
+        # compute sst outputs for all users × priors once per epoch (O(num_users × num_priors))
+        with torch.no_grad():
+            all_s_hat_flat = sst_model(all_user_emb_flat, p0_flat)  # sst_model output for all users × priors
+
+        all_s_hat_all = all_s_hat_flat.view(num_users, num_priors)
 
         # loop over batches
         for batch_idx in range(num_batches):
@@ -104,16 +117,16 @@ def train_fair_mf_mpr(
             y_hat = model(train_user_input, train_item_input)
             loss = criterion(y_hat.view(-1), train_ratings.view(-1))
 
-            # get embeddings
-            current_user_embs = model.user_emb(train_user_input)
+            # # get embeddings
+            # current_user_embs = model.user_emb(train_user_input)
 
-            # evaluate all priors every step 
-            user_emb_flat = current_user_embs.repeat_interleave(num_priors, dim=0)
+            # # evaluate all priors every step 
+            # user_emb_flat = current_user_embs.repeat_interleave(num_priors, dim=0)
 
-            with torch.no_grad():
-                s_hat_flat = sst_model(user_emb_flat, p0_flat)
+            # with torch.no_grad():
+            #     s_hat_flat = sst_model(user_emb_flat, p0_flat)
 
-            s_hat_all = s_hat_flat.view(batch_size, num_priors)
+            s_hat_all = all_s_hat_all[train_user_input] # get precomputed sst outputs for current users
 
             y_hat_exp = y_hat.unsqueeze(1).expand(-1, num_priors)
 
