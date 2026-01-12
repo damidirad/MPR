@@ -67,15 +67,12 @@ def train_fair_mf_mpr(
 
     # loop over epochs
     for epoch in tqdm(range(epochs), desc="[Fair MF Model] Training Fair MF-MPR"):
-        # subsample priors to speed up computation
-        if epoch % FULL_SWEEP_EVERY == 0:
-            prior_idx = torch.arange(num_all_priors, device=device)
-        else:
-            prior_idx = torch.randperm(num_all_priors, device=device)[:PRIOR_SUBSAMPLE_SIZE]
+        # subsample priors to speed up computation        
+        num_priors = PRIOR_SUBSAMPLE_SIZE if epoch % FULL_SWEEP_EVERY != 0 else num_all_priors
 
-        resample_tensor = resample_range.clone().detach().to(device)
-        p0_sub = resample_tensor[prior_idx]
-        num_priors = p0_sub.shape[0]
+        p0_sub = torch.normal(mean=0.5, std=0.15, size=(num_priors,)).to(device)
+        p0_sub = torch.clamp(p0_sub, 0.05, 0.95)
+
         p0_flat = p0_sub.repeat(num_users, 1).view(-1, 1)
 
         loss_total = 0.0
@@ -127,7 +124,7 @@ def train_fair_mf_mpr(
             mu_1 = torch.sum(y_prob_exp * s_hat_all, dim=0) / (torch.sum(s_hat_all, dim=0) + eps)
             mu_0 = torch.sum(y_prob_exp * (1 - s_hat_all), dim=0) / (torch.sum(1 - s_hat_all, dim=0) + eps)
 
-            fair_diffs = torch.abs(mu_1 - mu_0) / beta
+            fair_diffs = torch.abs(mu_1 - mu_0)
 
             batch_max_diff, batch_max_idx = fair_diffs.max(dim=0)
 
@@ -139,13 +136,35 @@ def train_fair_mf_mpr(
             # log-sum-exp (robust objective)
             C = fair_diffs.max().detach()
             fair_reg = fair_reg_schedule(epoch, fair_reg_max, warmup=warmup_epochs)
-            fair_regulation = fair_reg * beta * (torch.logsumexp(fair_diffs - C, dim=0) + C)
+            fair_regulation = fair_reg * beta * (torch.logsumexp((fair_diffs - C) / beta, dim=0) + C)
 
-            # total loss
-            total_loss = loss + fair_regulation
+            # additional covariance penalty to further reduce correlation
+            # between user embeddings and predicted sensitive attributes
+            user_embs_batch = model.user_emb(train_user_input) # [batch_size, embed_size]
+
+            # predicted sensitive attributes for users in batch
+            s_hat_batch = s_hat_all.mean(dim=1) # [batch_size]
+
+            # compute means
+            mu_u = user_embs_batch.mean(dim=0)
+            mu_s = s_hat_batch.mean()
+
+            # compute covariance: E[(U - E[U]) * (S - E[S])]
+            covariance = torch.mean((user_embs_batch - mu_u) * (s_hat_batch - mu_s).unsqueeze(1), dim=0)
+
+            # square of covariance to get penalty
+            cov_loss = torch.mean(covariance**2)
+
+            # weigh covariance penalty
+            lambda_cov = 0.0001
+            total_loss = loss + fair_regulation + (lambda_cov * cov_loss)
 
             optimizer.zero_grad()
             total_loss.backward()
+
+            # gradient clipping to avoid fairness spikes overriding recommendation logic
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
             optimizer.step()
 
             loss_total += loss.item()
@@ -169,6 +188,9 @@ def train_fair_mf_mpr(
 
         if epoch > 0 and not sst_frozen and (epoch % 20 == 0):
             print(f"\n[Adversarial Update] Refining SST on worst priors at epoch {epoch}...")
+
+            plausible_mask = (resample_range >= 0.15) & (resample_range <= 0.85)
+            filtered_diffs = epoch_worst_fair_diffs * plausible_mask.to(device)
             
             # use fair diffs from last batch for refinement
             refine_sst(
@@ -177,7 +199,7 @@ def train_fair_mf_mpr(
                 s0_known, 
                 s1_known, 
                 resample_range, 
-                epoch_worst_fair_diffs, 
+                filtered_diffs, 
                 device
             )
 

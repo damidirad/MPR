@@ -131,7 +131,7 @@ def train_amortized_sst(
 
 def evaluate_amortized_sst(sst_model, mf_model, s0_test, s1_test, device):
     sst_model.eval()
-    # Test on a neutral prior (0.5) and extreme priors
+    # test on a neutral prior (0.5) and extreme priors
     test_priors = [0.05, 0.1, 0.3, 0.5, 0.7, 0.9]
     
     user_ids = torch.cat([torch.tensor(s0_test), torch.tensor(s1_test)]).to(device)

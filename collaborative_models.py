@@ -54,7 +54,7 @@ class matrixFactorization(nn.Module):
         self.user_bias = nn.Embedding(num_users, 1)
         self.item_emb = nn.Embedding(num_items, emb_size)
         self.item_bias = nn.Embedding(num_items, 1)
-        self.user_emb.weight.data.uniform_(0,0.05)
+        self.user_emb.weight.data.uniform_(0,0.05) 
         self.item_emb.weight.data.uniform_(0,0.05)
         self.user_bias.weight.data.uniform_(-0.01,0.01)
         self.item_bias.weight.data.uniform_(-0.01,0.01)
